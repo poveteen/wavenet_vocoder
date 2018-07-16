@@ -77,6 +77,8 @@ If you only need the library part, then you can install it by the following comm
 pip install wavenet_vocoder
 ```
 
+또는 [smartear/wavenet_vocoder](https://hub.docker.com/r/smartear/wavenet_vocoder/) 도커 이미지를 사용할 수 있습니다.
+
 ## Getting started
 
 ### Preset parameters
