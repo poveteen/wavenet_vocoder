@@ -22,10 +22,10 @@ def build_from_path(in_dir, out_dir, num_workers=1, tqdm=lambda x: x):
     wav_paths = []
     speaker_ids = []
 
-    for speaker_id in os.listdir(in_dir) :
-        wavs_for_spk = glob("{}/{}/**/*.wav".format(in_dir, speaker_id), recursive=True)  
+    for id, speaker_path in enumerate(os.listdir(in_dir)) :
+        wavs_for_spk = glob("{}/{}/**/*.wav".format(in_dir, speaker_path), recursive=True)  
         wav_paths += wavs_for_spk
-        speaker_ids += [speaker_id] * len(wavs_for_spk)
+        speaker_ids += [id] * len(wavs_for_spk)
     
     for index, (speaker_id, wav_path) in enumerate(
             zip(speaker_ids, wav_paths)):
