@@ -77,7 +77,8 @@ If you only need the library part, then you can install it by the following comm
 pip install wavenet_vocoder
 ```
 
-또는 [smartear/wavenet_vocoder](https://hub.docker.com/r/smartear/wavenet_vocoder/) 도커 이미지를 사용할 수 있습니다.
+또는 [smartear/wavenet_vocoder](https://hub.docker.com/r/smartear/wavenet_vocoder/) 도커 이미지를 사용할 수 있습니다. 단, 이 이미지를 사용하더라도 `pip install -e ".[train]"`는 실행해야 합니다. 현재 이 명령어에 `librosa`가 설치 안되는 버그가 있는 것같습니다.
+
 
 ## Getting started
 
@@ -108,6 +109,7 @@ python train.py --preset=presets/cmu_arctic_8bit.json --data-root=./data/cmu_arc
 
 - CMU ARCTIC (en): http://festvox.org/cmu_arctic/
 - LJSpeech (en): https://keithito.com/LJ-Speech-Dataset/
+- 서울말 말뭉치 (ko) : 국립 국어원 홈페이지에서 연구 목적으로 데이터 요청 가능
 
 ### 1. Preprocessing
 
@@ -121,6 +123,7 @@ Supported `${dataset_name}`s for now are
 
 - `cmu_arctic` (multi-speaker)
 - `ljspeech` (single speaker)
+- `seoul_corpus` (multi-speaker)
 
 Assuming you use preset parameters known to work good for CMU ARCTIC dataset and have data in `~/data/cmu_arctic`, then you can preprocess data by:
 
