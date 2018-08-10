@@ -77,7 +77,7 @@ If you only need the library part, then you can install it by the following comm
 pip install wavenet_vocoder
 ```
 
-또는 [smartear/wavenet_vocoder](https://hub.docker.com/r/smartear/wavenet_vocoder/) 도커 이미지를 사용할 수 있습니다. 단, 이 이미지를 사용하더라도 `pip install -e ".[train]"`는 실행해야 합니다. 현재 이 명령어에 `librosa`가 설치 안되는 버그가 있는 것같습니다.
+또는 [smartear/wavenet_vocoder](https://hub.docker.com/r/smartear/wavenet_vocoder/) 도커 이미지를 사용할 수 있습니다. 단, 이 이미지를 사용하더라도 `pip install -e ".[train]"`는 실행해야 합니다. 현재 `pip install -e ".[train]"` 명령어에 `librosa`가 설치 안되는 버그가 있는 것같습니다. 위 도커 이미지는 `librosa`를 `pip install librosa`로 설치한 이미지입니다.
 
 
 ## Getting started
