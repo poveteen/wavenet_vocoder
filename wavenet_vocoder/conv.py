@@ -48,6 +48,12 @@ class Conv1d(nn.Conv1d):
     def clear_buffer(self):
         self.input_buffer = None
 
+    def get_buffer(self):
+        return self.input_buffer
+        
+    def set_buffer(self, buffer):
+        self.input_buffer = buffer
+        
     def _get_linearized_weight(self):
         if self._linearized_weight is None:
             kw = self.kernel_size[0]

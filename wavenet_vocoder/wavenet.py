@@ -237,7 +237,9 @@ class WaveNet(nn.Module):
         return x
 
     def incremental_forward(self, initial_input=None, c=None, g=None,
-                            T=100, test_inputs=None,
+                            T=100, test_inputs=None, buffers=None, return_buffer=False,
+                            skip_upsample=False,
+                            input_selector=None,
                             tqdm=lambda x: x, softmax=True, quantize=True,
                             log_scale_min=-7.0):
         """Incremental forward step
@@ -263,7 +265,9 @@ class WaveNet(nn.Module):
               or scaler vector B x 1 x T
         """
         self.clear_buffer()
-        B = 1
+        if buffers is not None :
+            self.set_buffer(buffers)
+        B = c.size(0)
 
         # Note: shape should be **(B x T x C)**, not (B x C x T) opposed to
         # batch forward due to linealized convolution
@@ -294,13 +298,14 @@ class WaveNet(nn.Module):
 
         # Local conditioning
         if c is not None and self.upsample_conv is not None:
-            # B x 1 x C x T
-            c = c.unsqueeze(1)
-            for f in self.upsample_conv:
-                c = f(c)
-            # B x C x T
-            c = c.squeeze(1)
-            assert c.size(-1) == T
+            if not skip_upsample :
+                # B x 1 x C x T
+                c = c.unsqueeze(1)
+                for f in self.upsample_conv:
+                    c = f(c)
+                # B x C x T
+                c = c.squeeze(1)
+                assert c.size(-1) == T
         if c is not None and c.size(-1) == T:
             c = c.transpose(1, 2).contiguous()
 
@@ -321,12 +326,15 @@ class WaveNet(nn.Module):
         current_input = initial_input
 
         for t in tqdm(range(T)):
-            if test_inputs is not None and t < test_inputs.size(1):
-                current_input = test_inputs[:, t, :].unsqueeze(1)
-            else:
-                if t > 0:
-                    current_input = outputs[-1]
-
+            if input_selector is None :
+                if test_inputs is not None and t < test_inputs.size(1):
+                    current_input = test_inputs[:, t, :].unsqueeze(1)
+                else:
+                    if t > 0:
+                        current_input = outputs[-1]
+            else :
+                current_input = input_selector(t, outputs)
+                        
             # Conditioning features for single time step
             ct = None if c is None else c[:, t, :].unsqueeze(1)
             gt = None if g is None else g_btc[:, t, :].unsqueeze(1)
@@ -364,8 +372,13 @@ class WaveNet(nn.Module):
         # B x C x T
         outputs = outputs.transpose(0, 1).transpose(1, 2).contiguous()
 
-        self.clear_buffer()
-        return outputs
+        if return_buffer :
+            buffers = self.get_buffer()
+            self.clear_buffer()
+            return outputs, buffers
+        else :
+            self.clear_buffer()
+            return outputs
 
     def clear_buffer(self):
         self.first_conv.clear_buffer()
@@ -377,6 +390,36 @@ class WaveNet(nn.Module):
             except AttributeError:
                 pass
 
+                
+    def get_buffer(self):
+        buffers = []
+        buffers.append(self.first_conv.get_buffer())
+        for f in self.conv_layers:
+            buffers.append(f.get_buffer())
+        for f in self.last_conv_layers:
+            try:
+                buffers.append(f.get_buffer())
+            except AttributeError:
+                pass
+        return buffers
+               
+
+    def set_buffer(self, buffers):
+        idx = 0
+        self.first_conv.set_buffer(buffers[idx])
+        idx += 1
+        
+        for f in self.conv_layers:
+            f.set_buffer(buffers[idx])
+            idx += 1
+        for f in self.last_conv_layers:
+            try:
+                f.set_buffer(buffers[idx])
+                idx += 1
+            except AttributeError:
+                pass
+               
+                
     def make_generation_fast_(self):
         def remove_weight_norm(m):
             try:

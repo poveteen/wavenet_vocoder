@@ -189,3 +189,21 @@ class ResidualConv1dGLU(nn.Module):
                   self.conv1x1c, self.conv1x1g]:
             if c is not None:
                 c.clear_buffer()
+
+                
+    def get_buffer(self):
+        buffers = []
+        for c in [self.conv, self.conv1x1_out, self.conv1x1_skip,
+                  self.conv1x1c, self.conv1x1g]:
+            if c is not None:
+                buffers.append(c.get_buffer())
+                
+        return buffers
+                
+                
+    def set_buffer(self, buffers):
+        for c, b in zip([self.conv, self.conv1x1_out, self.conv1x1_skip,
+                  self.conv1x1c, self.conv1x1g], buffers):
+            if c is not None:
+                c.set_buffer(b)
+                
