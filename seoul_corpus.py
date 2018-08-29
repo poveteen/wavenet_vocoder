@@ -21,16 +21,17 @@ def build_from_path(in_dir, out_dir, num_workers=1, tqdm=lambda x: x):
 
     wav_paths = []
     speaker_ids = []
-
+    speaker_paths = []
     for id, speaker_path in enumerate(os.listdir(in_dir)) :
         wavs_for_spk = glob("{}/{}/**/*.wav".format(in_dir, speaker_path), recursive=True)  
         wav_paths += wavs_for_spk
         speaker_ids += [id] * len(wavs_for_spk)
-    
-    for index, (speaker_id, wav_path) in enumerate(
-            zip(speaker_ids, wav_paths)):
+        speaker_paths += [speaker_path] * len(wavs_for_spk)
+        
+    for index, (speaker_id, wav_path, speaker_path) in enumerate(
+            zip(speaker_ids, wav_paths, speaker_paths)):
         futures.append(executor.submit(
-            partial(_process_utterance, out_dir, index + 1, speaker_id, wav_path, "N/A")))
+            partial(_process_utterance, out_dir, index + 1, speaker_id, wav_path, "N/A", speaker_path)))
     return [future.result() for future in tqdm(futures)]
 
 
@@ -54,7 +55,7 @@ def end_at(labels):
     assert False
 
 
-def _process_utterance(out_dir, index, speaker_id, wav_path, text):
+def _process_utterance(out_dir, index, speaker_id, wav_path, text, speaker_path):
     sr = hparams.sample_rate
 
     # Load the audio to a numpy array. Resampled if needed
@@ -127,4 +128,4 @@ def _process_utterance(out_dir, index, speaker_id, wav_path, text):
             mel_spectrogram.astype(np.float32), allow_pickle=False)
 
     # Return a tuple describing this training example:
-    return (audio_filename, mel_filename, timesteps, text, speaker_id)
+    return (audio_filename, mel_filename, timesteps, text, speaker_id, speaker_path)
