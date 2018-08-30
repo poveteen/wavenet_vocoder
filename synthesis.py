@@ -234,8 +234,8 @@ if __name__ == "__main__":
 
     os.makedirs(dst_dir, exist_ok=True)
     
-    # Batched Generation
-    waveform = wavegen(model, length, c=[c[:70,:],c[:50,:]], g=[speaker_id, speaker_id], initial_value=initial_value, fast=True)
+    # Generation
+    waveform = wavegen(model, length, c=c, g=speaker_id, initial_value=initial_value, fast=True)
         
     # Save
     if type(waveform)==list :
