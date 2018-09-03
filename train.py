@@ -25,6 +25,7 @@ from datetime import datetime
 import random
 
 import numpy as np
+import tensorflow as tf
 
 import matplotlib
 matplotlib.use('Agg')
@@ -96,6 +97,136 @@ def _pad_2d(x, max_len, b_pad=0):
     return x
 
 
+'''
+CLASS _TFRecordsDataSource
+
+FIELDS
+data_root : [some/path/spk_id_0, some/path/spk_id_1, ...]
+          : the order of entries affects training
+
+DIRECTORY STRUCTURE
+some/path/spk_id_0
++---sample_0_0
++---sample_0_1
++---...
+
+some/path/spk_id_1
++---sample_1_0
++---sample_1_1
++---...
+
+...
+
+'''
+
+
+'''
+https://github.com/smart-ear/tacotron2/blob/c6010b126253b62600db8cb37ad138a25b3f299f/datasets/preprocess.py#L326-L341
+'''
+def read_from_tfrecord(path, key) :
+    record_iterator = tf.python_io.tf_record_iterator(path=path)
+    for string_record in record_iterator:
+        example = tf.train.Example()
+        example.ParseFromString(string_record)
+        
+        keys = list(example.features.feature.keys())
+        keys = [key for key in keys if not key.endswith("_shape") and not key.endswith("_dtype")]
+        
+        if key not in keys :
+            raise ValueError("Unknown key {} is given.".format(key))
+        
+        value = example.features.feature[key].bytes_list.value[0]
+        dtype = str(example.features.feature[key+"_dtype"].bytes_list.value[0], encoding='utf-8')
+        shape = list(example.features.feature[key+"_shape"].int64_list.value)
+        return np.reshape(np.frombuffer(value, np.dtype(dtype)), shape)
+
+    
+def shape_from_tfrecord(path, key) :
+    record_iterator = tf.python_io.tf_record_iterator(path=path)
+    for string_record in record_iterator:
+        example = tf.train.Example()
+        example.ParseFromString(string_record)
+        
+        keys = list(example.features.feature.keys())
+        keys = [key for key in keys if not key.endswith("_shape") and not key.endswith("_dtype")]
+        
+        if key not in keys :
+            raise ValueError("Unknown key {} is given.".format(key))
+        
+        return list(example.features.feature[key+"_shape"].int64_list.value)
+
+
+class _TFRecordDataSource(FileDataSource):
+    def __init__(self, data_root, col, speaker_id=None,
+                 train=True, test_size=0.05, test_num_samples=None, random_state=1234):
+        self.data_root = data_root
+        self.col = col
+        self.lengths = []
+        self.speaker_id = speaker_id
+        self.multi_speaker = False
+        self.speaker_ids = None
+        self.train = train
+        self.test_size = test_size
+        self.test_num_samples = test_num_samples
+        self.random_state = random_state
+
+    def interest_indices(self, paths):
+        indices = np.arange(len(paths))
+        if self.test_size is None:
+            test_size = self.test_num_samples / len(paths)
+        else:
+            test_size = self.test_size
+        train_indices, test_indices = train_test_split(
+            indices, test_size=test_size, random_state=self.random_state)
+        return train_indices if self.train else test_indices
+
+    def collect_files(self):
+        self.multi_speaker = len(self.data_root) > 1
+        
+        paths = sum(list(map(lambda spk_path: [join(spk_path, f) for f in os.listdir(spk_path)], self.data_root)), [])
+        
+        self.lengths = list(map(lambda path: shape_from_tfrecord(path, self.col)[-0], paths))
+
+        if self.multi_speaker:
+            speaker_ids = sum(list(map(lambda spk_path: [os.path.basename(spk_path)]*len(os.listdir(spk_path)), self.data_root)), [])
+            # setup self.speaker_ids
+            self.speaker_ids = speaker_ids
+            if self.speaker_id is not None:
+                # Filter by speaker_id
+                # using multi-speaker dataset as a single speaker dataset
+                indices = np.array(speaker_ids) == self.speaker_id
+                paths = list(np.array(paths)[indices])
+                self.lengths = list(np.array(self.lengths)[indices])
+
+                # Filter by train/tset
+                indices = self.interest_indices(paths)
+                paths = list(np.array(paths)[indices])
+                self.lengths = list(np.array(self.lengths)[indices])
+
+                # aha, need to cast numpy.int64 to int
+                self.lengths = list(map(int, self.lengths))
+                self.multi_speaker = False
+
+                return paths
+
+        # Filter by train/test
+        indices = self.interest_indices(paths)
+        paths = list(np.array(paths)[indices])
+        lengths_np = list(np.array(self.lengths)[indices])
+        self.lengths = list(map(int, lengths_np))
+
+        if self.multi_speaker:
+            speaker_ids_np = list(np.array(self.speaker_ids)[indices])
+            self.speaker_ids = list(map(int, speaker_ids_np))
+            assert len(paths) == len(self.speaker_ids)
+
+        return paths
+
+
+    def collect_features(self, path):
+        return read_from_tfrecord(path, self.col)
+    
+    
 class _NPYDataSource(FileDataSource):
     def __init__(self, data_root, col, speaker_id=None,
                  train=True, test_size=0.05, test_num_samples=None, random_state=1234):
@@ -170,15 +301,25 @@ class _NPYDataSource(FileDataSource):
     def collect_features(self, path):
         return np.load(path)
 
+        
+        
+def RawAudioDataSource(data_root, **kwargs) :
+    # Automatically detects dataset format
+    if "train.txt" in os.listdir(data_root) :
+        return _NPYDataSource(data_root, 0, **kwargs)
+    else :
+        data_root = [join(data_root, f) for f in os.listdir(data_root)]
+        return _TFRecordDataSource(data_root, "out", **kwargs)
 
-class RawAudioDataSource(_NPYDataSource):
-    def __init__(self, data_root, **kwargs):
-        super(RawAudioDataSource, self).__init__(data_root, 0, **kwargs)
+    
+def MelSpecDataSource(data_root, **kwargs) :
+    # Automatically detects dataset format
+    if "train.txt" in os.listdir(data_root) :
+        return _NPYDataSource(data_root, 1, **kwargs)
+    else :
+        data_root = [join(data_root, f) for f in os.listdir(data_root)]
+        return _TFRecordDataSource(data_root, "mel", **kwargs)
 
-
-class MelSpecDataSource(_NPYDataSource):
-    def __init__(self, data_root, **kwargs):
-        super(MelSpecDataSource, self).__init__(data_root, 1, **kwargs)
 
 
 class PartialyRandomizedSimilarTimeLengthSampler(Sampler):
