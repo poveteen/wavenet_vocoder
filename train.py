@@ -4,6 +4,7 @@ usage: train.py [options]
 
 options:
     --data-root=<dir>            Directory contains preprocessed features.
+    --data-query=<mysql query>        Query retrieves ProfileIds whose are used to train the model.
     --checkpoint-dir=<dir>       Directory where to save model checkpoints [default: checkpoints].
     --hparams=<parmas>           Hyper parameters [default: ].
     --preset=<json>              Path of preset parameters (json).
@@ -60,6 +61,9 @@ from wavenet_vocoder.mixture import sample_from_discretized_mix_logistic
 import audio
 from hparams import hparams, hparams_debug_string
 
+sys.path.append(os.path.abspath("/leechanghwan/voicedb"))
+import voicedb
+
 global_step = 0
 global_test_step = 0
 global_epoch = 0
@@ -101,8 +105,8 @@ def _pad_2d(x, max_len, b_pad=0):
 CLASS _TFRecordsDataSource
 
 FIELDS
-data_root : [some/path/spk_id_0, some/path/spk_id_1, ...]
-          : the order of entries affects training
+self.data_root : [some/path/spk_id_0, some/path/spk_id_1, ...]
+               : the order of entries affects training
 
 DIRECTORY STRUCTURE
 some/path/spk_id_0
@@ -154,12 +158,11 @@ def shape_from_tfrecord(path, key) :
             raise ValueError("Unknown key {} is given.".format(key))
         
         return list(example.features.feature[key+"_shape"].int64_list.value)
-
-
+        
+        
 class _TFRecordDataSource(FileDataSource):
-    def __init__(self, data_root, col, speaker_id=None,
+    def __init__(self, col, speaker_id=None,
                  train=True, test_size=0.05, test_num_samples=None, random_state=1234):
-        self.data_root = data_root
         self.col = col
         self.lengths = []
         self.speaker_id = speaker_id
@@ -170,6 +173,17 @@ class _TFRecordDataSource(FileDataSource):
         self.test_num_samples = test_num_samples
         self.random_state = random_state
 
+        
+    def is_multi_speaker(self) :
+        raise NotImplementedError()
+        
+    def get_paths_and_lengths(self) :
+        raise NotImplementedError()
+        
+    def get_speaker_ids(self) :
+        raise NotImplementedError()
+        
+        
     def interest_indices(self, paths):
         indices = np.arange(len(paths))
         if self.test_size is None:
@@ -180,16 +194,14 @@ class _TFRecordDataSource(FileDataSource):
             indices, test_size=test_size, random_state=self.random_state)
         return train_indices if self.train else test_indices
 
+
     def collect_files(self):
-        self.multi_speaker = len(self.data_root) > 1
+        self.multi_speaker = self.is_multi_speaker()
         
-        paths = sum(list(map(lambda spk_path: [join(spk_path, f) for f in os.listdir(spk_path)], self.data_root)), [])
-        
-        self.lengths = list(map(lambda path: shape_from_tfrecord(path, self.col)[-0], paths))
+        paths, self.lengths = self.get_paths_and_lengths()
 
         if self.multi_speaker:
-            speaker_ids = sum(list(map(lambda spk_path: [os.path.basename(spk_path)]*len(os.listdir(spk_path)), self.data_root)), [])
-            # setup self.speaker_ids
+            speaker_ids = self.get_speaker_ids()
             self.speaker_ids = speaker_ids
             if self.speaker_id is not None:
                 # Filter by speaker_id
@@ -225,6 +237,57 @@ class _TFRecordDataSource(FileDataSource):
 
     def collect_features(self, path):
         return read_from_tfrecord(path, self.col)
+        
+        
+class TFRecordFileDataSource(_TFRecordDataSource) :
+    def __init__(self, data_root, *args, **kwargs) :
+        self.data_root = [join(data_root, f) for f in os.listdir(data_root)]
+        _TFRecordDataSource.__init__(self, *args, **kwargs)
+
+    def is_multi_speaker(self) :
+        return len(self.data_root) > 1
+        
+    def get_paths_and_lengths(self) :
+        paths = sum(list(map(lambda spk_path: [join(spk_path, f) for f in os.listdir(spk_path)], self.data_root)), [])
+        lengths = list(map(lambda path: shape_from_tfrecord(path, self.col)[0], paths))
+        
+        return paths, lengths
+        
+    def get_speaker_ids(self) :
+        return sum(list(map(lambda spk_path: [os.path.basename(spk_path)]*len(os.listdir(spk_path)), self.data_root)), [])
+        
+        
+class TFRecordVoiceDBDataSource(_TFRecordDataSource) :
+    def __init__(self, query, *args, **kwargs) :
+        self.query = query
+        
+        with voicedb._get_conn().cursor() as cursor :
+            cursor.execute(self.query)
+        result = cursor.fetchall()
+        self.speakers = [i["ProfileID"] for i in result]
+        
+        _TFRecordDataSource.__init__(self, *args, **kwargs)
+
+    def is_multi_speaker(self) :
+        return len(self.speakers) > 1
+        
+    def get_paths_and_lengths(self) :
+        paths = []
+        for spk_id in self.speakers :
+            with voicedb.get_speaker(spk_id) as spk :
+                paths += spk.datum
+    
+        lengths = list(map(lambda path: shape_from_tfrecord(path, self.col)[0], paths))
+        
+        return paths, lengths
+        
+    def get_speaker_ids(self) :
+        ids = []
+        for spk_id in self.speakers :
+            with voicedb.get_speaker(spk_id) as spk :
+                ids += [spk_id]*len(spk.datum)
+                
+        return ids
     
     
 class _NPYDataSource(FileDataSource):
@@ -305,23 +368,32 @@ class _NPYDataSource(FileDataSource):
 
         
         
-def RawAudioDataSource(data_root, **kwargs) :
-    # Automatically detects dataset format
-    if "train.txt" in os.listdir(data_root) :
-        return _NPYDataSource(data_root, 0, **kwargs)
+def RawAudioDataSource(data_source, **kwargs) :
+    if data_source[0] == "voicedb" :
+        query = data_source[1]
+        return TFRecordVoiceDBDataSource(query, "out", **kwargs)
+    elif data_source[0] == "directory" :
+        data_root = data_source[1]
+        if "train.txt" in os.listdir(data_root) :
+            return _NPYDataSource(data_root, 0, **kwargs)
+        else :
+            return TFRecordFileDataSource(data_root, "out", **kwargs)
     else :
-        data_root = [join(data_root, f) for f in os.listdir(data_root)]
-        return _TFRecordDataSource(data_root, "out", **kwargs)
+        raise ValueError("Unknown data source type {}".format(data_source[0]))
 
     
-def MelSpecDataSource(data_root, **kwargs) :
-    # Automatically detects dataset format
-    if "train.txt" in os.listdir(data_root) :
-        return _NPYDataSource(data_root, 1, **kwargs)
+def MelSpecDataSource(data_source, **kwargs) :
+    if data_source[0] == "voicedb" :
+        query = data_source[1]
+        return TFRecordVoiceDBDataSource(query, "mel", **kwargs)
+    elif data_source[0] == "directory" :
+        data_root = data_source[1]
+        if "train.txt" in os.listdir(data_root) :
+            return _NPYDataSource(data_root, 1, **kwargs)
+        else :
+            return TFRecordFileDataSource(data_root, "mel", **kwargs)
     else :
-        data_root = [join(data_root, f) for f in os.listdir(data_root)]
-        return _TFRecordDataSource(data_root, "mel", **kwargs)
-
+        raise ValueError("Unknown data source type {}".format(data_source[0]))
 
 
 class PartialyRandomizedSimilarTimeLengthSampler(Sampler):
@@ -996,18 +1068,24 @@ def restore_parts(path, model):
                 warn("{}: may contain invalid size of weight. skipping...".format(k))
 
 
-def get_data_loaders(data_root, speaker_id, test_shuffle=True):
+'''
+data_source : (type, data)
+            + type : one of ["directory", "voicedb"]
+            + data : string path if type=="directory"
+                   + string query if type="voicedb"
+'''
+def get_data_loaders(data_source, speaker_id, test_shuffle=True):
     data_loaders = {}
     local_conditioning = hparams.cin_channels > 0
     for phase in ["train", "test"]:
         train = phase == "train"
-        X = FileSourceDataset(RawAudioDataSource(data_root, speaker_id=speaker_id,
+        X = FileSourceDataset(RawAudioDataSource(data_source, speaker_id=speaker_id,
                                                  train=train,
                                                  test_size=hparams.test_size,
                                                  test_num_samples=hparams.test_num_samples,
                                                  random_state=hparams.random_state))
         if local_conditioning:
-            Mel = FileSourceDataset(MelSpecDataSource(data_root, speaker_id=speaker_id,
+            Mel = FileSourceDataset(MelSpecDataSource(data_source, speaker_id=speaker_id,
                                                       train=train,
                                                       test_size=hparams.test_size,
                                                       test_num_samples=hparams.test_num_samples,
@@ -1061,9 +1139,18 @@ if __name__ == "__main__":
     preset = args["--preset"]
 
     data_root = args["--data-root"]
-    if data_root is None:
-        data_root = join(dirname(__file__), "data", "ljspeech")
-
+    data_query = args["--data-query"]
+    
+    if data_root is not None and data_query is not None :
+        raise ValueError("Only one of 'data-root' or 'data-query' must be given.")
+    elif data_root is None and data_query is None :
+        data_source = join(dirname(__file__), "data", "ljspeech")
+    elif data_root is not None :
+        data_source = ("directory", data_root)
+    elif data_query is not None :
+        data_source = ("voicedb", data_query)
+    
+        
     log_event_path = args["--log-event-path"]
     reset_optimizer = args["--reset-optimizer"]
 
@@ -1081,7 +1168,7 @@ if __name__ == "__main__":
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     # Dataloader setup
-    data_loaders = get_data_loaders(data_root, speaker_id, test_shuffle=True)
+    data_loaders = get_data_loaders(data_source, speaker_id, test_shuffle=True)
 
     device = torch.device("cuda" if use_cuda else "cpu")
 
