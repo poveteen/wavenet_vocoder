@@ -256,8 +256,10 @@ class _NPYDataSource(FileDataSource):
         with open(meta, "rb") as f:
             lines = f.readlines()
         l = lines[0].decode("utf-8").split("|")
-        assert len(l) == 4 or len(l) == 5
-        self.multi_speaker = len(l) == 5
+        assert len(l) == 4 or len(l) == 5 or len(l) == 6
+        # in case of seoul_corpus, len(l) == 6 and is always multi-speaker
+        # otherwise, if len(l) == 5, then multi-speaker
+        self.multi_speaker = len(l) == 5 or len(l) == 6
         self.lengths = list(
             map(lambda l: int(l.decode("utf-8").split("|")[2]), lines))
 
@@ -265,7 +267,7 @@ class _NPYDataSource(FileDataSource):
         paths = list(map(lambda f: join(self.data_root, f), paths_relative))
 
         if self.multi_speaker:
-            speaker_ids = list(map(lambda l: int(l.decode("utf-8").split("|")[-1]), lines))
+            speaker_ids = list(map(lambda l: int(l.decode("utf-8").split("|")[4]), lines))
             self.speaker_ids = speaker_ids
             if self.speaker_id is not None:
                 # Filter by speaker_id
