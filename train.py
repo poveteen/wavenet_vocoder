@@ -4,7 +4,10 @@ usage: train.py [options]
 
 options:
     --data-root=<dir>            Directory contains preprocessed features.
-    --data-query=<mysql query>        Query retrieves ProfileIds whose are used to train the model.
+    --data-query=<mysql query>   Query retrieves ProfileIds whose are used to train the model.
+    --tacotron2-mel=<bool>       if true, use tacotron2's mel prediction for training.
+                                 This field is valid when dataset is in tfrecord foramt.
+                                 Prediction must be inserted into the dataset manually.
     --checkpoint-dir=<dir>       Directory where to save model checkpoints [default: checkpoints].
     --hparams=<parmas>           Hyper parameters [default: ].
     --preset=<json>              Path of preset parameters (json).
@@ -385,13 +388,19 @@ def RawAudioDataSource(data_source, **kwargs) :
 def MelSpecDataSource(data_source, **kwargs) :
     if data_source[0] == "voicedb" :
         query = data_source[1]
-        return TFRecordVoiceDBDataSource(query, "mel", **kwargs)
+        if data_source[2] :
+            return TFRecordVoiceDBDataSource(query, "prediction", **kwargs)
+        else :
+            return TFRecordVoiceDBDataSource(query, "mel", **kwargs)
     elif data_source[0] == "directory" :
         data_root = data_source[1]
         if "train.txt" in os.listdir(data_root) :
             return _NPYDataSource(data_root, 1, **kwargs)
         else :
-            return TFRecordFileDataSource(data_root, "mel", **kwargs)
+            if data_source[2] :
+                return TFRecordFileDataSource(data_root, "prediction", **kwargs)
+            else :
+                return TFRecordFileDataSource(data_root, "mel", **kwargs)
     else :
         raise ValueError("Unknown data source type {}".format(data_source[0]))
 
@@ -1069,10 +1078,11 @@ def restore_parts(path, model):
 
 
 '''
-data_source : (type, data)
+data_source : (type, data, tacotron2-mel)
             + type : one of ["directory", "voicedb"]
             + data : string path if type=="directory"
-                   + string query if type="voicedb"
+            |      + string query if type="voicedb"
+            + tacotron2-mel : bool       
 '''
 def get_data_loaders(data_source, speaker_id, test_shuffle=True):
     data_loaders = {}
@@ -1128,6 +1138,15 @@ def get_data_loaders(data_source, speaker_id, test_shuffle=True):
     return data_loaders
 
 
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+    
+    
 if __name__ == "__main__":
     args = docopt(__doc__)
     print("Command line args:\n", args)
@@ -1141,15 +1160,19 @@ if __name__ == "__main__":
     data_root = args["--data-root"]
     data_query = args["--data-query"]
     
+    if args["--tacotron2-mel"] is not None :
+        tacotron2_mel = str2bool(args["--tacotron2-mel"])
+    else :
+        tacotron2_mel = False
+    
     if data_root is not None and data_query is not None :
         raise ValueError("Only one of 'data-root' or 'data-query' must be given.")
     elif data_root is None and data_query is None :
-        data_source = join(dirname(__file__), "data", "ljspeech")
+        data_source = ("directory", join(dirname(__file__), "data", "ljspeech"), tacotron2_mel)
     elif data_root is not None :
-        data_source = ("directory", data_root)
+        data_source = ("directory", data_root, tacotron2_mel)
     elif data_query is not None :
-        data_source = ("voicedb", data_query)
-    
+        data_source = ("voicedb", data_query, tacotron2_mel)
         
     log_event_path = args["--log-event-path"]
     reset_optimizer = args["--reset-optimizer"]
