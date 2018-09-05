@@ -5,9 +5,11 @@ usage: train.py [options]
 options:
     --data-root=<dir>            Directory contains preprocessed features.
     --data-query=<mysql query>   Query retrieves ProfileIds whose are used to train the model.
-    --tacotron2-mel=<bool>       if true, use tacotron2's mel prediction for training.
+    --tacotron2-mel              if given, use tacotron2's mel prediction for training.
                                  This field is valid when dataset is in tfrecord foramt.
                                  Prediction must be inserted into the dataset manually.
+    --symmetric-mels             Symmetric mel.
+    --max-abs-value=<N>          Max abs value [default: -1].
     --checkpoint-dir=<dir>       Directory where to save model checkpoints [default: checkpoints].
     --hparams=<parmas>           Hyper parameters [default: ].
     --preset=<json>              Path of preset parameters (json).
@@ -164,9 +166,11 @@ def shape_from_tfrecord(path, key) :
         
         
 class _TFRecordDataSource(FileDataSource):
-    def __init__(self, col, speaker_id=None,
+    def __init__(self, col, symmetric_mels, max_abs_value, speaker_id=None,
                  train=True, test_size=0.05, test_num_samples=None, random_state=1234):
         self.col = col
+        self.symmetric_mels = symmetric_mels
+        self.max_abs_value = max_abs_value
         self.lengths = []
         self.speaker_id = speaker_id
         self.multi_speaker = False
@@ -239,7 +243,13 @@ class _TFRecordDataSource(FileDataSource):
 
 
     def collect_features(self, path):
-        return read_from_tfrecord(path, self.col)
+        c = read_from_tfrecord(path, self.col)
+        if self.max_abs_value > 0:
+            min_, max_ = 0, self.max_abs_value
+            if self.symmetric_mels:
+                min_ = -max_
+            c = np.interp(c, (min_, max_), (0, 1))
+        return c
         
         
 class TFRecordFileDataSource(_TFRecordDataSource) :
@@ -374,13 +384,13 @@ class _NPYDataSource(FileDataSource):
 def RawAudioDataSource(data_source, **kwargs) :
     if data_source[0] == "voicedb" :
         query = data_source[1]
-        return TFRecordVoiceDBDataSource(query, "out", **kwargs)
+        return TFRecordVoiceDBDataSource(query, "out", data_source[2][1], data_source[2][2], **kwargs)
     elif data_source[0] == "directory" :
         data_root = data_source[1]
         if "train.txt" in os.listdir(data_root) :
             return _NPYDataSource(data_root, 0, **kwargs)
         else :
-            return TFRecordFileDataSource(data_root, "out", **kwargs)
+            return TFRecordFileDataSource(data_root, "out", data_source[2][1], data_source[2][2], **kwargs)
     else :
         raise ValueError("Unknown data source type {}".format(data_source[0]))
 
@@ -388,19 +398,19 @@ def RawAudioDataSource(data_source, **kwargs) :
 def MelSpecDataSource(data_source, **kwargs) :
     if data_source[0] == "voicedb" :
         query = data_source[1]
-        if data_source[2] :
-            return TFRecordVoiceDBDataSource(query, "prediction", **kwargs)
+        if data_source[2][0] :
+            return TFRecordVoiceDBDataSource(query, "prediction", data_source[2][1], data_source[2][2], **kwargs)
         else :
-            return TFRecordVoiceDBDataSource(query, "mel", **kwargs)
+            return TFRecordVoiceDBDataSource(query, "mel", data_source[2][1], data_source[2][2], **kwargs)
     elif data_source[0] == "directory" :
         data_root = data_source[1]
         if "train.txt" in os.listdir(data_root) :
             return _NPYDataSource(data_root, 1, **kwargs)
         else :
-            if data_source[2] :
-                return TFRecordFileDataSource(data_root, "prediction", **kwargs)
+            if data_source[2][0] :
+                return TFRecordFileDataSource(data_root, "prediction", data_source[2][1], data_source[2][2], **kwargs)
             else :
-                return TFRecordFileDataSource(data_root, "mel", **kwargs)
+                return TFRecordFileDataSource(data_root, "mel", data_source[2][1], data_source[2][2], **kwargs)
     else :
         raise ValueError("Unknown data source type {}".format(data_source[0]))
 
@@ -1078,11 +1088,13 @@ def restore_parts(path, model):
 
 
 '''
-data_source : (type, data, tacotron2-mel)
+data_source : (type, data, (tacotron2_mel, symmetric_mels, max_abs_value))
             + type : one of ["directory", "voicedb"]
             + data : string path if type=="directory"
             |      + string query if type="voicedb"
-            + tacotron2-mel : bool       
+            + tacotron2-mel : bool     
+            + symmetric_mels : bool
+            + max_abs_value : float
 '''
 def get_data_loaders(data_source, speaker_id, test_shuffle=True):
     data_loaders = {}
@@ -1160,19 +1172,20 @@ if __name__ == "__main__":
     data_root = args["--data-root"]
     data_query = args["--data-query"]
     
-    if args["--tacotron2-mel"] is not None :
-        tacotron2_mel = str2bool(args["--tacotron2-mel"])
-    else :
-        tacotron2_mel = False
+    tacotron2_mel = args["--tacotron2-mel"]
+    symmetric_mels = args["--symmetric-mels"]
+    max_abs_value = float(args["--max-abs-value"])
+    
+    args_tuple = (tacotron2_mel, symmetric_mels, max_abs_value)
     
     if data_root is not None and data_query is not None :
         raise ValueError("Only one of 'data-root' or 'data-query' must be given.")
     elif data_root is None and data_query is None :
-        data_source = ("directory", join(dirname(__file__), "data", "ljspeech"), tacotron2_mel)
+        data_source = ("directory", join(dirname(__file__), "data", "ljspeech"), args_tuple)
     elif data_root is not None :
-        data_source = ("directory", data_root, tacotron2_mel)
+        data_source = ("directory", data_root, args_tuple)
     elif data_query is not None :
-        data_source = ("voicedb", data_query, tacotron2_mel)
+        data_source = ("voicedb", data_query, args_tuple)
         
     log_event_path = args["--log-event-path"]
     reset_optimizer = args["--reset-optimizer"]
