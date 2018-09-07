@@ -244,11 +244,12 @@ class _TFRecordDataSource(FileDataSource):
 
     def collect_features(self, path):
         c = read_from_tfrecord(path, self.col)
-        if self.max_abs_value > 0:
-            min_, max_ = 0, self.max_abs_value
-            if self.symmetric_mels:
-                min_ = -max_
-            c = np.interp(c, (min_, max_), (0, 1))
+        if self.col == "prediction" or self.col == "mel" :
+            if self.max_abs_value > 0:
+                min_, max_ = 0, self.max_abs_value
+                if self.symmetric_mels:
+                    min_ = -max_
+                c = np.interp(c, (min_, max_), (0, 1))
         return c
         
         
