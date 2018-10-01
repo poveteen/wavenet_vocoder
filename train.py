@@ -106,6 +106,32 @@ def _pad_2d(x, max_len, b_pad=0):
     return x
 
 
+########
+#HOTFIX#
+########
+print("Building speaker id to wavenet speaker index mapping...")
+id_to_idx = {}
+id_to_name = {}
+with open("id-name-map.txt", 'r') as f:
+    for line in f :
+        line = line.strip()
+        line = line.split('|')
+        id_to_name[int(line[0])] = line[1]
+
+name_to_idx = {}
+with open("index-name-map.txt", 'r') as f:
+    for line in f :
+        line = line.strip()
+        line = line.split('|')
+        name_to_idx[line[1]] = int(line[0])
+
+for id, name in id_to_name.items() :
+    if name in name_to_idx :
+        id_to_idx[id] = name_to_idx[name]
+    else :
+        print("[WARNING] Unknown speaker name")
+        id_to_idx[id] = 0
+    
 '''
 CLASS _TFRecordsDataSource
 
@@ -298,7 +324,8 @@ class TFRecordVoiceDBDataSource(_TFRecordDataSource) :
         ids = []
         for spk_id in self.speakers :
             with voicedb.get_speaker(spk_id) as spk :
-                ids += [spk_id]*len(spk.datum)
+                # HOTFIX HERE
+                ids += [id_to_idx[spk_id]]*len(spk.datum)
                 
         return ids
     
