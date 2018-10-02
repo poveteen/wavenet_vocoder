@@ -72,6 +72,7 @@ import voicedb
 global_step = 0
 global_test_step = 0
 global_epoch = 0
+global_id_to_index = None
 use_cuda = torch.cuda.is_available()
 if use_cuda:
     cudnn.benchmark = False
@@ -251,7 +252,16 @@ class _TFRecordDataSource(FileDataSource):
             c = np.interp(c, (min_, max_), (0, 1))
         return c
         
-        
+
+'''
+사실상 디버그 용도로 작성된 DataSource입니다.
+Speaker ID / INDEX 처리가 불명확하여 사용시 버그가 발생할 수 있습니다.
+
+TODO
+디렉토리 구조를 명확히 해야합니다. : 각 Speaker 별 디렉토리 이름을 0부터 시작하는 단조 증가 수열로 제한할 것인가?
+                       + 그렇지 않다면 TFRecordVoiceDBDataSource처럼 처리할 것인가?
+                       + get_speaker_ids에서 수정 필요합니다.
+'''
 class TFRecordFileDataSource(_TFRecordDataSource) :
     def __init__(self, data_root, *args, **kwargs) :
         self.data_root = [join(data_root, f) for f in os.listdir(data_root)]
@@ -263,7 +273,6 @@ class TFRecordFileDataSource(_TFRecordDataSource) :
     def get_paths_and_lengths(self) :
         paths = sum(list(map(lambda spk_path: [join(spk_path, f) for f in os.listdir(spk_path)], self.data_root)), [])
         lengths = list(map(lambda path: shape_from_tfrecord(path, self.col)[0], paths))
-        
         return paths, lengths
         
     def get_speaker_ids(self) :
@@ -271,13 +280,8 @@ class TFRecordFileDataSource(_TFRecordDataSource) :
         
         
 class TFRecordVoiceDBDataSource(_TFRecordDataSource) :
-    def __init__(self, query, *args, **kwargs) :
-        self.query = query
-        
-        with voicedb._get_conn().cursor() as cursor :
-            cursor.execute(self.query)
-        result = cursor.fetchall()
-        self.speakers = [i["ProfileID"] for i in result]
+    def __init__(self, speakers, *args, **kwargs) :      
+        self.speakers = speakers
         
         _TFRecordDataSource.__init__(self, *args, **kwargs)
 
@@ -286,21 +290,24 @@ class TFRecordVoiceDBDataSource(_TFRecordDataSource) :
         
     def get_paths_and_lengths(self) :
         paths = []
+        lengths = []
         for spk_id in self.speakers :
             with voicedb.get_speaker(spk_id) as spk :
-                paths += spk.datum
-    
-        lengths = list(map(lambda path: shape_from_tfrecord(path, self.col)[0], paths))
-        
+                sample_metas = spk.get_sample_meta()
+                lengths += [x[1] for x in sample_metas]
+                sample_ids = [x[0] for x in sample_metas]
+                data_paths = [spk._get_path_from_sample_id(x) for x in sample_ids]
+                paths += data_paths
+                
         return paths, lengths
         
     def get_speaker_ids(self) :
-        ids = []
+        idxs = []
         for spk_id in self.speakers :
             with voicedb.get_speaker(spk_id) as spk :
-                ids += [spk_id]*len(spk.datum)
+                idxs += [global_id_to_index[spk_id]]*spk.size()
                 
-        return ids
+        return idxs
     
     
 class _NPYDataSource(FileDataSource):
@@ -383,8 +390,8 @@ class _NPYDataSource(FileDataSource):
         
 def RawAudioDataSource(data_source, **kwargs) :
     if data_source[0] == "voicedb" :
-        query = data_source[1]
-        return TFRecordVoiceDBDataSource(query, "out", data_source[2][1], data_source[2][2], **kwargs)
+        speakers = data_source[1]
+        return TFRecordVoiceDBDataSource(speakers, "out", data_source[2][1], data_source[2][2], **kwargs)
     elif data_source[0] == "directory" :
         data_root = data_source[1]
         if "train.txt" in os.listdir(data_root) :
@@ -397,11 +404,11 @@ def RawAudioDataSource(data_source, **kwargs) :
     
 def MelSpecDataSource(data_source, **kwargs) :
     if data_source[0] == "voicedb" :
-        query = data_source[1]
+        speakers = data_source[1]
         if data_source[2][0] :
-            return TFRecordVoiceDBDataSource(query, "prediction", data_source[2][1], data_source[2][2], **kwargs)
+            return TFRecordVoiceDBDataSource(speakers, "prediction", data_source[2][1], data_source[2][2], **kwargs)
         else :
-            return TFRecordVoiceDBDataSource(query, "mel", data_source[2][1], data_source[2][2], **kwargs)
+            return TFRecordVoiceDBDataSource(speakers, "mel", data_source[2][1], data_source[2][2], **kwargs)
     elif data_source[0] == "directory" :
         data_root = data_source[1]
         if "train.txt" in os.listdir(data_root) :
@@ -980,12 +987,14 @@ def save_checkpoint(device, model, optimizer, step, checkpoint_dir, epoch, ema=N
         checkpoint_dir, "checkpoint_step{:09d}.pth".format(global_step))
     optimizer_state = optimizer.state_dict() if hparams.save_optimizer_state else None
     global global_test_step
+    global global_id_to_index
     torch.save({
         "state_dict": model.state_dict(),
         "optimizer": optimizer_state,
         "global_step": step,
         "global_epoch": epoch,
         "global_test_step": global_test_step,
+        "global_id_to_index": global_id_to_index
     }, checkpoint_path)
     print("Saved checkpoint:", checkpoint_path)
 
@@ -999,6 +1008,7 @@ def save_checkpoint(device, model, optimizer, step, checkpoint_dir, epoch, ema=N
             "global_step": step,
             "global_epoch": epoch,
             "global_test_step": global_test_step,
+            "global_id_to_index": global_id_to_index
         }, checkpoint_path)
         print("Saved averaged checkpoint:", checkpoint_path)
 
@@ -1048,7 +1058,8 @@ def load_checkpoint(path, model, optimizer, reset_optimizer):
     global global_step
     global global_epoch
     global global_test_step
-
+    global global_id_to_index
+    
     print("Load checkpoint from: {}".format(path))
     checkpoint = _load(path)
     model.load_state_dict(checkpoint["state_dict"])
@@ -1060,7 +1071,7 @@ def load_checkpoint(path, model, optimizer, reset_optimizer):
     global_step = checkpoint["global_step"]
     global_epoch = checkpoint["global_epoch"]
     global_test_step = checkpoint.get("global_test_step", 0)
-
+    global_id_to_index = checkpoint["global_id_to_index"]
     return model
 
 
@@ -1091,7 +1102,7 @@ def restore_parts(path, model):
 data_source : (type, data, (tacotron2_mel, symmetric_mels, max_abs_value))
             + type : one of ["directory", "voicedb"]
             + data : string path if type=="directory"
-            |      + string query if type="voicedb"
+            |      + [int, ...] list of spekaer id if type=="voicedb"
             + tacotron2-mel : bool     
             + symmetric_mels : bool
             + max_abs_value : float
@@ -1135,6 +1146,8 @@ def get_data_loaders(data_source, speaker_id, test_shuffle=True):
             num_workers=hparams.num_workers, sampler=sampler, shuffle=shuffle,
             collate_fn=collate_fn, pin_memory=hparams.pin_memory)
 
+        # TODO Temporarilly disabled, it enumerates entire dataset which is time consuming.
+        '''
         speaker_ids = {}
         for idx, (x, c, g) in enumerate(dataset):
             if g is not None:
@@ -1144,7 +1157,7 @@ def get_data_loaders(data_source, speaker_id, test_shuffle=True):
                     speaker_ids[g] = 1
         if len(speaker_ids) > 0:
             print("Speaker stats:", speaker_ids)
-
+        '''
         data_loaders[phase] = data_loader
 
     return data_loaders
@@ -1175,18 +1188,7 @@ if __name__ == "__main__":
     tacotron2_mel = args["--tacotron2-mel"]
     symmetric_mels = args["--symmetric-mels"]
     max_abs_value = float(args["--max-abs-value"])
-    
-    args_tuple = (tacotron2_mel, symmetric_mels, max_abs_value)
-    
-    if data_root is not None and data_query is not None :
-        raise ValueError("Only one of 'data-root' or 'data-query' must be given.")
-    elif data_root is None and data_query is None :
-        data_source = ("directory", join(dirname(__file__), "data", "ljspeech"), args_tuple)
-    elif data_root is not None :
-        data_source = ("directory", data_root, args_tuple)
-    elif data_query is not None :
-        data_source = ("voicedb", data_query, args_tuple)
-        
+            
     log_event_path = args["--log-event-path"]
     reset_optimizer = args["--reset-optimizer"]
 
@@ -1202,9 +1204,6 @@ if __name__ == "__main__":
     fs = hparams.sample_rate
 
     os.makedirs(checkpoint_dir, exist_ok=True)
-
-    # Dataloader setup
-    data_loaders = get_data_loaders(data_source, speaker_id, test_shuffle=True)
 
     device = torch.device("cuda" if use_cuda else "cpu")
 
@@ -1234,6 +1233,31 @@ if __name__ == "__main__":
     print("TensorBoard event log path: {}".format(log_event_path))
     writer = SummaryWriter(log_dir=log_event_path)
 
+    # Dataloader setup
+    args_tuple = (tacotron2_mel, symmetric_mels, max_abs_value)
+    if data_root is not None and data_query is not None :
+        raise ValueError("Only one of 'data-root' or 'data-query' must be given.")
+    elif data_root is None and data_query is None :
+        data_source = ("directory", join(dirname(__file__), "data", "ljspeech"), args_tuple)
+    elif data_root is not None :
+        data_source = ("directory", data_root, args_tuple)
+    elif data_query is not None :
+        if global_id_to_index is None :
+            with voicedb._get_conn().cursor() as cursor :
+                cursor.execute(data_query)
+            result = cursor.fetchall()
+            speakers = [i["ProfileID"] for i in result]
+            speakers.sort()
+            
+            global_id_to_index = {spk_id:speakers.index(spk_id) for spk_id in speakers}
+            
+            data_source = ("voicedb", speakers, args_tuple)
+        else :
+            print("[WARNING] Command line argument 'data-query' is ignored. Speakers are loaded from checkpoint.")
+            data_source = ("voicedb", list(global_id_to_index.keys()), args_tuple)
+    
+    data_loaders = get_data_loaders(data_source, speaker_id, test_shuffle=True)
+    
     # Train!
     try:
         train_loop(device, model, data_loaders, optimizer, writer,
