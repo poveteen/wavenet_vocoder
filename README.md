@@ -77,7 +77,7 @@ If you only need the library part, then you can install it by the following comm
 pip install wavenet_vocoder
 ```
 
-또는 [smartear/wavenet_vocoder](https://hub.docker.com/r/smartear/wavenet_vocoder/) 도커 이미지를 사용할 수 있습니다. 단, 이 이미지를 사용하더라도 `pip install -e ".[train]"`는 실행해야 합니다. 현재 `pip install -e ".[train]"` 명령어에 `librosa`가 설치 안되는 버그가 있는 것같습니다. 위 도커 이미지는 `librosa`를 `pip install librosa`로 설치한 이미지입니다.
+또는 [smartear/wavenet_vocoder](https://hub.docker.com/r/smartear/wavenet_vocoder/) 도커 이미지를 사용할 수 있습니다. 단, 이 이미지를 사용하더라도 `pip install -e ".[train]"`는 실행해야 합니다. 라이브러리는 모두 설치된 상태이기 때문에 시간은 많이 걸리지 않습니다.
 
 
 ## Getting started
@@ -110,6 +110,7 @@ python train.py --preset=presets/cmu_arctic_8bit.json --data-root=./data/cmu_arc
 - CMU ARCTIC (en): http://festvox.org/cmu_arctic/
 - LJSpeech (en): https://keithito.com/LJ-Speech-Dataset/
 - 서울말 말뭉치 (ko) : 국립 국어원 홈페이지에서 연구 목적으로 데이터 요청 가능
+- KSS (ko) : https://www.kaggle.com/bryanpark/korean-single-speaker-speech-dataset
 
 ### 1. Preprocessing
 
@@ -140,10 +141,11 @@ When this is done, you will see time-aligned extracted features (pairs of audio 
 Usage:
 
 ```
-python train.py --data-root=${data-root} --preset=<json> --hparams="parameters you want to override"
+python train.py --data-root=${data-root} --data-query=${data-query} --preset=<json> --hparams="parameters you want to override"
 ```
 
 Important options:
+- `--data-root`와 `--data-query`는 둘 중 하나만 적용됩니다. `--data-root`는 디렉토리에 저장된 데이터셋을 사용하여 학습하고 `--data-query`는 [VoiceDB](https://github.com/smart-ear/voicedb)에 저장된 데이터셋을 사용하여 학습합니다. `SELECT ProfileID FROM Profiles WHERE SourceID=1 OR SourceID=6`을 `--data-query`로 제공하면 서울말 말뭉치와 KSS 전체를 대상으로 학습이 이뤄집니다.
 
 - `--speaker-id=<n>`: (Multi-speaker dataset only) it specifies which speaker of data we use for training. If this is not specified, all training data are used. This should only be specified when you are dealing with a multi-speaker dataset. For example, if you are trying to build a speaker-dependent WaveNet vocoder for speaker `awb` of CMU ARCTIC, then you have to specify `--speaker-id=0`. Speaker ID is automatically assigned as follows:
 
