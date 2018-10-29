@@ -80,11 +80,14 @@ def wavegen(model, length=None, c=None, g=None, initial_value=None,
 
     # Prepare Local Condition
     batch_size = 1
-
+    output_should_be_list = False
+    
     if c is None:
         assert length is not None
     else:
         if type(c)==list :
+            output_should_be_list = True
+            
             c = [_to_numpy(x) for x in c]
             for x in c :
                 if x.ndim != 2:
@@ -170,10 +173,10 @@ def wavegen(model, length=None, c=None, g=None, initial_value=None,
     else:
         y_hat = y_hat.view(batch_size, -1).cpu().data.numpy()
 
-    if batch_size == 1 :
-        return y_hat[0, :]
-    else :
+    if output_should_be_list :
         return [y_hat[i, :length_list[i]] for i in range(batch_size)]
+    else :
+        return y_hat[0, :]
 
         
 if __name__ == "__main__":
